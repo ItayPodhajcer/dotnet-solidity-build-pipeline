@@ -1,0 +1,99 @@
+trigger:
+  - master
+  
+variables:
+  contractName: 'SimpleExample'
+  libraryName: 'Example.Contracts'
+  pacakgeVersion: '1.0.0'
+
+stages:
+- stage: 'build_contract'
+  jobs:
+  - job: 'build_contract'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Npm@1
+      inputs:
+        command: 'install'
+      displayName: npm install
+    - script: |
+        cd src
+        npx truffle compile contracts/$(contractName).sol
+      displayName: truffle compile $(contractName)
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src/build/contracts/$(contractName).json'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(contractName)-$(Build.BuildId).zip'
+      displayName: archive contract $(contractName)
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(contractName)-$(Build.BuildId).zip'
+        ArtifactName: $(contractName)-drop-$(Build.BuildId)
+      displayName: publish contract $(contractName)
+
+- stage: 'generate_dotnet_nuget'
+  dependsOn: 'build_contract'
+  condition: succeeded('build_contract')
+  jobs:
+  - deployment: 'generate_dotnet_nuget'
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: 'website-$(Build.SourceBranchName)'
+    strategy:
+      runOnce:
+        deploy: 
+          steps:
+          - task: UseDotNet@2
+            enabled: true
+            inputs:
+              packageType: 'sdk'
+              version: '2.1.x'
+            displayName: 'use netcore 2.1.x'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'custom'
+              custom: 'tool'
+              arguments: 'install -g Nethereum.Generator.Console'
+            displayName: 'install Nethereum'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'custom'
+              custom: 'new'
+              arguments: 'classlib -n $(libraryName) -o $(System.DefaultWorkingDirectory)/classlib/'
+            displayName: 'create project'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'custom'
+              custom: 'add'
+              arguments: 'package Nethereum.Web3'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/classlib/'
+            displayName: 'add package Nethereum.Web3'
+          - script: |
+              rm $(System.DefaultWorkingDirectory)/classlib/*.cs
+            displayName: 'remove default C# files'
+          - task: ExtractFiles@1
+            inputs:
+              archiveFilePatterns: '$(Pipeline.Workspace)/$(contractName)-drop-$(Build.BuildId)/*.zip'
+              destinationFolder: '$(System.DefaultWorkingDirectory)/contract/'
+            displayName: 'extract contract'
+          - script: |
+              Nethereum.Generator.Console generate from-truffle -d $(System.DefaultWorkingDirectory)/contract/ -o $(System.DefaultWorkingDirectory)/classlib/ -ns $(libraryName)
+            displayName: 'generate dotnet code'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'custom'
+              custom: 'pack'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/classlib/'
+              arguments: '-p:PackageVersion=$(pacakgeVersion) --version-suffix "pre-$(Build.BuildId)" -o $(Build.ArtifactStagingDirectory)/'
+            displayName: 'dotnet pack'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'push'
+              searchPatternPush: '$(Build.ArtifactStagingDirectory)/*.nupkg'
+              feedPublish: 'TempRepos/internal-nuget'
+            displayName: 'dotnet nuget push'
+          
+
