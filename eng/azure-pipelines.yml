@@ -93,7 +93,7 @@ stages:
             inputs:
               command: 'push'
               searchPatternPush: '$(Build.ArtifactStagingDirectory)/*.nupkg'
-              feedPublish: 'TempRepos/internal-nuget'
+              feedPublish: 'internal-nuget'
             displayName: 'dotnet nuget push'
           
 
